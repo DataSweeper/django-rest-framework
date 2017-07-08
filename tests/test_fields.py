@@ -8,10 +8,11 @@ from decimal import Decimal
 import pytest
 from django.http import QueryDict
 from django.test import TestCase, override_settings
-from django.utils import six, timezone
+from django.utils import six
+from django.utils.timezone import utc
 
 import rest_framework
-from rest_framework import serializers
+from rest_framework import compat, serializers
 from rest_framework.fields import is_simple_callable
 
 try:
@@ -703,6 +704,17 @@ class TestSlugField(FieldValues):
     outputs = {}
     field = serializers.SlugField()
 
+    def test_allow_unicode_true(self):
+        field = serializers.SlugField(allow_unicode=True)
+
+        validation_error = False
+        try:
+            field.run_validation(u'slug-99-\u0420')
+        except serializers.ValidationError:
+            validation_error = True
+
+        assert not validation_error
+
 
 class TestURLField(FieldValues):
     """
@@ -1129,13 +1141,13 @@ class TestDateTimeField(FieldValues):
     Valid and invalid values for `DateTimeField`.
     """
     valid_inputs = {
-        '2001-01-01 13:00': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC()),
-        '2001-01-01T13:00': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC()),
-        '2001-01-01T13:00Z': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC()),
-        datetime.datetime(2001, 1, 1, 13, 00): datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC()),
-        datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC()): datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC()),
+        '2001-01-01 13:00': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc),
+        '2001-01-01T13:00': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc),
+        '2001-01-01T13:00Z': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc),
+        datetime.datetime(2001, 1, 1, 13, 00): datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc),
+        datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc): datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc),
         # Django 1.4 does not support timezone string parsing.
-        '2001-01-01T13:00Z': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC())
+        '2001-01-01T13:00Z': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc)
     }
     invalid_inputs = {
         'abc': ['Datetime has wrong format. Use one of these formats instead: YYYY-MM-DDThh:mm[:ss[.uuuuuu]][+HH:MM|-HH:MM|Z].'],
@@ -1144,13 +1156,13 @@ class TestDateTimeField(FieldValues):
     }
     outputs = {
         datetime.datetime(2001, 1, 1, 13, 00): '2001-01-01T13:00:00',
-        datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC()): '2001-01-01T13:00:00Z',
+        datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc): '2001-01-01T13:00:00Z',
         '2001-01-01T00:00:00': '2001-01-01T00:00:00',
         six.text_type('2016-01-10T00:00:00'): '2016-01-10T00:00:00',
         None: None,
         '': None,
     }
-    field = serializers.DateTimeField(default_timezone=timezone.UTC())
+    field = serializers.DateTimeField(default_timezone=utc)
 
 
 class TestCustomInputFormatDateTimeField(FieldValues):
@@ -1158,13 +1170,13 @@ class TestCustomInputFormatDateTimeField(FieldValues):
     Valid and invalid values for `DateTimeField` with a custom input format.
     """
     valid_inputs = {
-        '1:35pm, 1 Jan 2001': datetime.datetime(2001, 1, 1, 13, 35, tzinfo=timezone.UTC()),
+        '1:35pm, 1 Jan 2001': datetime.datetime(2001, 1, 1, 13, 35, tzinfo=utc),
     }
     invalid_inputs = {
         '2001-01-01T20:50': ['Datetime has wrong format. Use one of these formats instead: hh:mm[AM|PM], DD [Jan-Dec] YYYY.']
     }
     outputs = {}
-    field = serializers.DateTimeField(default_timezone=timezone.UTC(), input_formats=['%I:%M%p, %d %b %Y'])
+    field = serializers.DateTimeField(default_timezone=utc, input_formats=['%I:%M%p, %d %b %Y'])
 
 
 class TestCustomOutputFormatDateTimeField(FieldValues):
@@ -1196,12 +1208,36 @@ class TestNaiveDateTimeField(FieldValues):
     Valid and invalid values for `DateTimeField` with naive datetimes.
     """
     valid_inputs = {
-        datetime.datetime(2001, 1, 1, 13, 00, tzinfo=timezone.UTC()): datetime.datetime(2001, 1, 1, 13, 00),
+        datetime.datetime(2001, 1, 1, 13, 00, tzinfo=utc): datetime.datetime(2001, 1, 1, 13, 00),
         '2001-01-01 13:00': datetime.datetime(2001, 1, 1, 13, 00),
     }
     invalid_inputs = {}
     outputs = {}
     field = serializers.DateTimeField(default_timezone=None)
+
+
+class TestNaiveDayLightSavingTimeTimeZoneDateTimeField(FieldValues):
+    """
+    Invalid values for `DateTimeField` with datetime in DST shift (non-existing or ambiguous) and timezone with DST.
+    Timezone America/New_York has DST shift from 2017-03-12T02:00:00 to 2017-03-12T03:00:00 and
+     from 2017-11-05T02:00:00 to 2017-11-05T01:00:00 in 2017.
+    """
+    valid_inputs = {}
+    invalid_inputs = {
+        '2017-03-12T02:30:00': ['Invalid datetime for the timezone "America/New_York".'],
+        '2017-11-05T01:30:00': ['Invalid datetime for the timezone "America/New_York".']
+    }
+    outputs = {}
+
+    class MockTimezone:
+        @staticmethod
+        def localize(value, is_dst):
+            raise compat.InvalidTimeError()
+
+        def __str__(self):
+            return 'America/New_York'
+
+    field = serializers.DateTimeField(default_timezone=MockTimezone())
 
 
 class TestTimeField(FieldValues):
@@ -1665,6 +1701,16 @@ class TestEmptyListField(FieldValues):
     ]
     outputs = {}
     field = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
+
+
+class TestListFieldLengthLimit(FieldValues):
+    valid_inputs = ()
+    invalid_inputs = [
+        ((0, 1), ['Ensure this field has at least 3 elements.']),
+        ((0, 1, 2, 3, 4, 5), ['Ensure this field has no more than 4 elements.']),
+    ]
+    outputs = ()
+    field = serializers.ListField(child=serializers.IntegerField(), min_length=3, max_length=4)
 
 
 class TestUnvalidatedListField(FieldValues):

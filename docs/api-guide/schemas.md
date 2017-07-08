@@ -107,6 +107,8 @@ add a schema to your API, depending on exactly what you need.
 The simplest way to include a schema in your project is to use the
 `get_schema_view()` function.
 
+    from rest_framework.schemas import get_schema_view
+
     schema_view = get_schema_view(title="Server Monitoring API")
 
     urlpatterns = [
@@ -117,7 +119,7 @@ The simplest way to include a schema in your project is to use the
 Once the view has been added, you'll be able to make API requests to retrieve
 the auto-generated schema definition.
 
-    $ http http://127.0.0.1:8000/ Accept:application/vnd.coreapi+json
+    $ http http://127.0.0.1:8000/ Accept:application/coreapi+json
     HTTP/1.0 200 OK
     Allow: GET, HEAD, OPTIONS
     Content-Type: application/vnd.coreapi+json
@@ -161,6 +163,7 @@ ROOT_URLCONF setting.
 
 May be used to pass the set of renderer classes that can be used to render the API root endpoint.
 
+    from rest_framework.schemas import get_schema_view
     from rest_framework.renderers import CoreJSONRenderer
     from my_custom_package import APIBlueprintRenderer
 
@@ -169,6 +172,28 @@ May be used to pass the set of renderer classes that can be used to render the A
         url='https://www.example.org/api/',
         renderer_classes=[CoreJSONRenderer, APIBlueprintRenderer]
     )
+
+#### `patterns`
+
+List of url patterns to limit the schema introspection to. If you only want the `myproject.api` urls
+to be exposed in the schema:
+
+    schema_url_patterns = [
+        url(r'^api/', include('myproject.api.urls')),
+    ]
+
+    schema_view = get_schema_view(
+        title='Server Monitoring API',
+        url='https://www.example.org/api/',
+        patterns=schema_url_patterns,
+    )
+
+#### `generator_class`
+
+May be used to specify a `SchemaGenerator` subclass to be passed to the
+`SchemaView`.
+
+
 
 ## Using an explicit schema view
 

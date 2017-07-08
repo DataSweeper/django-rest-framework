@@ -96,7 +96,7 @@ class TestViewNamesAndDescriptions(TestCase):
         Ensure a view may have a docstring that is actually a lazily evaluated
         class that can be converted to a string.
 
-        See: https://github.com/tomchristie/django-rest-framework/issues/1708
+        See: https://github.com/encode/django-rest-framework/issues/1708
         """
         # use a mock object instead of gettext_lazy to ensure that we can't end
         # up with a test case string in our l10n catalog
@@ -124,4 +124,8 @@ class TestViewNamesAndDescriptions(TestCase):
 
 
 def test_dedent_tabs():
-    assert dedent("\tfirst string\n\n\tsecond string") == 'first string\n\n\tsecond string'
+    result = 'first string\n\nsecond string'
+    assert dedent("    first string\n\n    second string") == result
+    assert dedent("first string\n\n    second string") == result
+    assert dedent("\tfirst string\n\n\tsecond string") == result
+    assert dedent("first string\n\n\tsecond string") == result

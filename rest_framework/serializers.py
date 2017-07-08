@@ -15,7 +15,7 @@ from __future__ import unicode_literals
 import copy
 import inspect
 import traceback
-from collections import OrderedDict
+from collections import Mapping, OrderedDict
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.exceptions import ImproperlyConfigured
@@ -38,7 +38,8 @@ from rest_framework.utils.field_mapping import (
     get_relation_kwargs, get_url_kwargs
 )
 from rest_framework.utils.serializer_helpers import (
-    BindingDict, BoundField, NestedBoundField, ReturnDict, ReturnList
+    BindingDict, BoundField, JSONBoundField, NestedBoundField, ReturnDict,
+    ReturnList
 )
 from rest_framework.validators import (
     UniqueForDateValidator, UniqueForMonthValidator, UniqueForYearValidator,
@@ -326,11 +327,11 @@ def as_serializer_error(exc):
     else:
         detail = exc.detail
 
-    if isinstance(detail, dict):
+    if isinstance(detail, Mapping):
         # If errors may be a dict we use the standard {key: list of values}.
         # Here we ensure that all the values are *lists* of errors.
         return {
-            key: value if isinstance(value, (list, dict)) else [value]
+            key: value if isinstance(value, (list, Mapping)) else [value]
             for key, value in detail.items()
         }
     elif isinstance(detail, list):
@@ -442,7 +443,7 @@ class Serializer(BaseSerializer):
         """
         Dict of native values <- Dict of primitive datatypes.
         """
-        if not isinstance(data, dict):
+        if not isinstance(data, Mapping):
             message = self.error_messages['invalid'].format(
                 datatype=type(data).__name__
             )
@@ -521,6 +522,8 @@ class Serializer(BaseSerializer):
         error = self.errors.get(key) if hasattr(self, '_errors') else None
         if isinstance(field, Serializer):
             return NestedBoundField(field, value, error)
+        if isinstance(field, JSONField):
+            return JSONBoundField(field, value, error)
         return BoundField(field, value, error)
 
     # Include a backlink to the serializer class on return objects.
@@ -561,6 +564,10 @@ class ListSerializer(BaseSerializer):
         assert not inspect.isclass(self.child), '`child` has not been instantiated.'
         super(ListSerializer, self).__init__(*args, **kwargs)
         self.child.bind(field_name='', parent=self)
+
+    def bind(self, field_name, parent):
+        super(ListSerializer, self).bind(field_name, parent)
+        self.partial = self.parent.partial
 
     def get_initial(self):
         if hasattr(self, 'initial_data'):
@@ -613,6 +620,9 @@ class ListSerializer(BaseSerializer):
             }, code='not_a_list')
 
         if not self.allow_empty and len(data) == 0:
+            if self.parent and self.partial:
+                raise SkipField()
+
             message = self.error_messages['empty']
             raise ValidationError({
                 api_settings.NON_FIELD_ERRORS_KEY: [message]
@@ -999,13 +1009,15 @@ class ModelSerializer(Serializer):
                 fields[field_name] = declared_fields[field_name]
                 continue
 
+            extra_field_kwargs = extra_kwargs.get(field_name, {})
+            source = extra_field_kwargs.get('source', '*') != '*' or field_name
+
             # Determine the serializer field class and keyword arguments.
             field_class, field_kwargs = self.build_field(
-                field_name, info, model, depth
+                source, info, model, depth
             )
 
             # Include any kwargs defined in `Meta.extra_kwargs`
-            extra_field_kwargs = extra_kwargs.get(field_name, {})
             field_kwargs = self.include_extra_kwargs(
                 field_kwargs, extra_field_kwargs
             )
@@ -1147,6 +1159,11 @@ class ModelSerializer(Serializer):
         field_class = field_mapping[model_field]
         field_kwargs = get_field_kwargs(field_name, model_field)
 
+        # Special case to handle when a OneToOneField is also the primary key
+        if model_field.one_to_one and model_field.primary_key:
+            field_class = self.serializer_related_field
+            field_kwargs['queryset'] = model_field.related_model.objects
+
         if 'choices' in field_kwargs:
             # Fields with choices get coerced into `ChoiceField`
             # instead of using their regular typed field.
@@ -1177,7 +1194,7 @@ class ModelSerializer(Serializer):
 
         if postgres_fields and isinstance(model_field, postgres_fields.ArrayField):
             # Populate the `child` argument on `ListField` instances generated
-            # for the PostgrSQL specfic `ArrayField`.
+            # for the PostgreSQL specific `ArrayField`.
             child_model_field = model_field.base_field
             child_field_class, child_field_kwargs = self.build_standard_field(
                 'child', child_model_field
@@ -1289,6 +1306,15 @@ class ModelSerializer(Serializer):
                 kwargs = extra_kwargs.get(field_name, {})
                 kwargs['read_only'] = True
                 extra_kwargs[field_name] = kwargs
+
+        else:
+            # Guard against the possible misspelling `readonly_fields` (used
+            # by the Django admin and others).
+            assert not hasattr(self.Meta, 'readonly_fields'), (
+                'Serializer `%s.%s` has field `readonly_fields`; '
+                'the correct spelling for the option is `read_only_fields`.' %
+                (self.__class__.__module__, self.__class__.__name__)
+            )
 
         return extra_kwargs
 
